@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>マイフォルダアプリ</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f4f7f6; }
+    .container { max-width: 500px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .hidden { display: none; }
+    input, button { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    button { background: #4285F4; color: white; border: none; cursor: pointer; font-weight: bold; }
+    button:hover { background: #3367D6; }
+    hr { border: 0; border-top: 1px solid #eee; margin: 20px 0; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>マイフォルダ アプリ</h2>
+
+  <!-- 1. 初期ログイン画面 -->
+  <div id="login-view">
+    <p>まずはGoogleアカウントで認証してください。</p>
+    <button id="btn-google-login">Googleでログイン</button>
+    <hr>
+    <p>次回以降のログインはこちら</p>
+    <input type="email" id="login-email" placeholder="登録済みメールアドレス(ログインID)">
+    <input type="password" id="login-pass" placeholder="パスワード">
+    <button id="btn-email-login" style="background: #34A853;">メール＆パスワードでログイン</button>
+  </div>
+
+  <!-- 2. 初回登録画面（Googleログイン後にプロフィールがない場合） -->
+  <div id="register-view" class="hidden">
+    <h3>プロフィールの設定</h3>
+    <p>次回から利用するログイン情報を設定してください。</p>
+    <input type="text" id="reg-nickname" placeholder="ニックネーム" required>
+    <input type="email" id="reg-email" placeholder="ログインID (メールアドレス形式)" required>
+    <input type="password" id="reg-pass" placeholder="パスワード (6文字以上)" required>
+    <button id="btn-complete-reg">登録を完了する</button>
+  </div>
+
+  <!-- 3. メインダッシュボード（ログイン完了後） -->
+  <div id="dashboard-view" class="hidden">
+    <h3 id="welcome-msg">ようこそ！</h3>
+    <button id="btn-logout" style="background: #EA4335;">ログアウト</button>
+    <hr>
+    <h4>ファイルアップロード</h4>
+    <p>あなた専用のフォルダに保存されます。</p>
+    <input type="file" id="file-input" accept="image/*,video/*">
+    <button id="btn-upload">アップロード</button>
+    <p id="upload-status"></p>
+  </div>
+</div>
+
+<script type="module">
+  // --- Firebaseのインポート ---
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+  import { getAuth, signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword, onAuthStateChanged, linkWithCredential, EmailAuthProvider, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+  import { getStorage, ref, uploadBytes } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-storage.js";
+  
+  // --- Supabaseのインポート ---
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/+esm";
+
+  // --- 設定値の初期化 ---
+  const firebaseConfig = {
+    apiKey: "AIzaSyCgug5YJYykjXjb7ThxWPyILn5Coy1xv2I",
+    authDomain: "sksks-cea03.firebaseapp.com",
+    projectId: "sksks-cea03",
+    storageBucket: "sksks-cea03.firebasestorage.app",
+    messagingSenderId: "348815110412",
+    appId: "1:348815110412:web:da7a4ff0d66a0571f75929",
+    measurementId: "G-3525Q39ZDJ"
+  };
+
+  const supabaseUrl = "https://tsjxnkynkjtatrobrkkf.supabase.co";
+  // ※URLから /rest/v1/ は除外して設定します
+  const supabaseKey = "sb_publishable_H1Wa7Sx2N_gqs7nO5xawuQ_5pulm-ie";
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const storage = getStorage(app);
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
+  // --- UI要素の取得 ---
+  const views = {
+    login: document.getElementById('login-view'),
+    register: document.getElementById('register-view'),
+    dashboard: document.getElementById('dashboard-view')
+  };
+
+  function showView(viewName) {
+    Object.values(views).forEach(v => v.classList.add('hidden'));
+    views[viewName].classList.remove('hidden');
+  }
+
+  // --- 認証状態の監視 ---
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      // ログインしている場合、Supabaseにプロフィールがあるか確認
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('nickname')
+        .eq('firebase_uid', user.uid)
+        .single();
+
+      if (data) {
+        // プロフィールが存在する（登録完了済み）
+        document.getElementById('welcome-msg').innerText = `ようこそ、${data.nickname}さん！`;
+        showView('dashboard');
+      } else {
+        // プロフィールがない（初回Googleログイン直後）
+        showView('register');
+      }
+    } else {
+      showView('login');
+    }
+  });
+
+  // --- 1. Googleログイン ---
+  document.getElementById('btn-google-login').addEventListener('click', async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Googleログインエラー:", error);
+      alert("ログインに失敗しました。");
+    }
+  });
+
+  // --- 1.5 メール＆パスワードでログイン（次回以降） ---
+  document.getElementById('btn-email-login').addEventListener('click', async () => {
+    const email = document.getElementById('login-email').value;
+    const pass = document.getElementById('login-pass').value;
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch (error) {
+      console.error("ログインエラー:", error);
+      alert("IDかパスワードが間違っています。");
+    }
+  });
+
+  // --- 2. プロフィール＆ログインID設定 ---
+  document.getElementById('btn-complete-reg').addEventListener('click', async () => {
+    const user = auth.currentUser;
+    const nickname = document.getElementById('reg-nickname').value;
+    const email = document.getElementById('reg-email').value; // これがログインIDになります
+    const pass = document.getElementById('reg-pass').value;
+
+    if (!nickname || !email || !pass) return alert("全て入力してください");
+
+    try {
+      // Googleアカウントにメール・パスワードの認証情報を紐付け
+      const credential = EmailAuthProvider.credential(email, pass);
+      await linkWithCredential(user, credential);
+
+      // Supabaseにプロフィール情報を保存
+      const { error } = await supabase
+        .from('profiles')
+        .insert([{ 
+          firebase_uid: user.uid, 
+          nickname: nickname, 
+          login_email: email 
+        }]);
+
+      if (error) throw error;
+      
+      alert("登録が完了しました！");
+      document.getElementById('welcome-msg').innerText = `ようこそ、${nickname}さん！`;
+      showView('dashboard');
+
+    } catch (error) {
+      console.error("登録エラー:", error);
+      alert("エラーが発生しました。パスワードは6文字以上で設定してください。");
+    }
+  });
+
+  // --- 3. ファイルのアップロード ---
+  document.getElementById('btn-upload').addEventListener('click', async () => {
+    const user = auth.currentUser;
+    const fileInput = document.getElementById('file-input');
+    const statusText = document.getElementById('upload-status');
+
+    if (!fileInput.files.length) return alert("ファイルを選択してください。");
+    const file = fileInput.files[0];
+
+    // ユーザー固有のパス（users/ユーザーUID/ファイル名）を作成
+    const storageRef = ref(storage, `users/${user.uid}/${file.name}`);
+
+    statusText.innerText = "アップロード中...";
+    try {
+      await uploadBytes(storageRef, file);
+      statusText.innerText = "✅ アップロード完了！";
+      fileInput.value = ""; // 入力をリセット
+    } catch (error) {
+      console.error("アップロードエラー:", error);
+      statusText.innerText = "❌ アップロードに失敗しました。";
+    }
+  });
+
+  // --- ログアウト ---
+  document.getElementById('btn-logout').addEventListener('click', () => {
+    signOut(auth);
+  });
+
+</script>
+</body>
+</html>
